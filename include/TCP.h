@@ -9,12 +9,6 @@
 
 #pragma once
 
-
-const size_t TCP_MAX_PACKET_SIZE = 1024;
-
-const time_t TCP_TIMEOUT = 60; //in seconds
-
-
 //we check the boost version here, but we should actually check the cinder version
 #include <boost/version.hpp>
 #if BOOST_VERSION >= 105200
@@ -22,6 +16,9 @@ const time_t TCP_TIMEOUT = 60; //in seconds
 #endif
 
 #include "cinder/app/App.h"
+
+const size_t TCP_MAX_PACKET_SIZE = 1024;
+const time_t TCP_TIMEOUT = 60; //in seconds
 
 
 namespace tcp {

@@ -16,11 +16,6 @@
 
 #pragma once
 
-// defines the value of _WIN32_WINNT needed by boost asio (WINDOWS ONLY)
-#ifdef WIN32
-    #include <sdkddkver.h>
-#endif
-
 #include "TCP.h"
 
 #include "cinder/Cinder.h"
