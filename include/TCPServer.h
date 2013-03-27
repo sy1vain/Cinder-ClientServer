@@ -34,7 +34,7 @@ namespace tcp {
     
     typedef std::shared_ptr<ip::tcp::socket> socket_ptr;
     typedef std::shared_ptr<ip::tcp::acceptor> acceptor_ptr;
-
+    
     class TCPServer {
         
         /*****************************************/
@@ -51,7 +51,6 @@ namespace tcp {
         }
         
         ~TCPServer(){
-            
         }
         
         
@@ -86,7 +85,22 @@ namespace tcp {
             if(!mObj) return;
             mObj->sendAll(data);
         }
-       
+        
+        /*****************************************/
+        /** SIGNALS ******************************/
+        /*****************************************/
+#if defined(TCP_USE_SIGNALS)
+        typedef cinder::signals::signal<void(TCPClientRef)> connection_signal_type;
+        
+        connection_signal_type& getSignalConnect(){
+            return mObj->mConnectSignal;
+        }
+        
+        connection_signal_type& getSignalDisconnect(){
+            return mObj->mDisconnectSignal;
+        }
+        
+#endif
         
     private:
         struct Obj : public boost::enable_shared_from_this< Obj > {
@@ -193,8 +207,8 @@ namespace tcp {
                                               [](TCPClientRef client) {
                                                   return !client->isConnected();
                                               }
-                               )
-                );
+                                              )
+                               );
                 
             }
             
@@ -202,31 +216,54 @@ namespace tcp {
             /** HANDLER FUNCTIONS ********************/
             /*****************************************/
 #if defined(TCP_USE_SIGNALS)
-
+            
             void client_disconnect(endpoint_ptr endpoint){
                 std::lock_guard<std::mutex> lock(mDataMutex);
                 
                 for(auto& client : mClients){
                     if(client->getEndpoint()==endpoint){
-                        mDisconnectedClients.push(client);
+                        mDisconnectedClients.push_back(client);
                     }
                 }
             }
             
             
             void cleanupDisconnectedClients(){
-                //remove all disconnected clients
-                std::lock_guard<std::mutex> lock(mDataMutex);
+                {//remove all disconnected clients
+                    std::lock_guard<std::mutex> lock(mDataMutex);
+                    
+                    if(mDisconnectedClients.empty()) return;
+                    
+                    //delete them all (within the lock scope)
+                    for(auto& client: mDisconnectedClients){
+                        mClients.erase(
+                                       std::find(
+                                                 mClients.begin(),
+                                                 mClients.end(),
+                                                 client
+                                                 )
+                                       );
+                    }
+                    
+                }
                 
-                if(mDisconnectedClients.empty()) return;
-                
-                while(!mDisconnectedClients.empty()){
-                    mClients.erase(std::find(mClients.begin(), mClients.end(), mDisconnectedClients.front()));
-                    mDisconnectedClients.pop();
+                //signal all
+                for(auto& client: mDisconnectedClients){
+                    mDisconnectSignal(client);
+                    //and remoev all signals from this client
+                    //in case someone is still listening to it
+                    //with a reference to itself
+                    client->clearSignals();
                 }
                 
                 
+                //toss them all
+                {
+                    std::lock_guard<std::mutex> lock(mDataMutex);
+                    mDisconnectedClients.clear();
+                }
             }
+            
 #endif
             
             void accept_handler(const TCPClientRef & client, const boost::system::error_code& error){
@@ -244,7 +281,11 @@ namespace tcp {
                     client->getSignalDisconnect().connect(std::bind(&Obj::client_disconnect, this, std::_1));
                     
                     client->setState(TCP_CONNECTED);
-                
+                    
+#if defined(TCP_USE_SIGNALS)
+                    mConnectSignal(client);
+#endif
+                    
                 }else{
                     std::cout << "Error: " << error << std::endl;
                 }
@@ -269,11 +310,11 @@ namespace tcp {
             }
             
             void stopThread(){
-                if(mThread){
-                    {
-                        std::lock_guard<std::mutex> lock(mRunMutex);
-                        mThreadRunning = false;
-                    }
+                {
+                    std::lock_guard<std::mutex> lock(mRunMutex);
+                    mThreadRunning = false;
+                }
+                if(mThread && mThread->joinable()){
                     mThread->join();
                 }
             }
@@ -334,7 +375,11 @@ namespace tcp {
             std::vector<TCPClientRef>           mClients;
             std::string                         mDelimiter;
 #if defined(TCP_USE_SIGNALS)
-            std::queue<TCPClientRef>           mDisconnectedClients;
+            
+            connection_signal_type              mConnectSignal;
+            connection_signal_type              mDisconnectSignal;
+            
+            std::vector<TCPClientRef>           mDisconnectedClients;
 #endif
             
             
@@ -349,6 +394,6 @@ namespace tcp {
         operator unspecified_bool_type() const { return ( mObj.get() == 0 ) ? 0 : &TCPServer::mObj; }
         void reset() { mObj.reset(); }
         //@}
-    
+        
     };
 };

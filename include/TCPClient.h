@@ -160,6 +160,17 @@ namespace tcp {
             return mObj->mDataSignal;
         }
         
+    protected:
+        void clearSignals(){
+            //here we disconnect all and invoke immediatly to clean them up
+            mObj->mConnectSignal.disconnect_all_slots();
+            mObj->mConnectSignal(endpoint_ptr());
+            mObj->mDisconnectSignal.disconnect_all_slots();
+            mObj->mDisconnectSignal(endpoint_ptr());
+            mObj->mDataSignal.disconnect_all_slots();
+            mObj->mDataSignal(endpoint_ptr(),ci::Buffer());
+        }
+        
         
 #endif
         

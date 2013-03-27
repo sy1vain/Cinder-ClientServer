@@ -29,8 +29,8 @@ namespace tcp {
     class TCPClient;
     class TCPServer;
     
-    typedef boost::shared_ptr<tcp::TCPClient> TCPClientRef;
-    typedef boost::shared_ptr<tcp::TCPServer> TCPServerRef;
+    typedef std::shared_ptr<tcp::TCPClient> TCPClientRef;
+    typedef std::shared_ptr<tcp::TCPServer> TCPServerRef;
     
     
     static boost::asio::io_service& io_service(){
