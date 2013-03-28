@@ -345,7 +345,10 @@ namespace tcp {
                 }
                 
                 TCPState state = getState();
+                //we are not ready yet since reading hasn't started yet
+                if(state<TCP_READING) return;
                 if(state<TCP_WRITE || state>TCP_WRITING){
+                    
                     //request a write
                     setState(TCP_WRITE);
                 }
@@ -374,8 +377,7 @@ namespace tcp {
                     
                     mState = state;
                 }
-                                
-				
+                
                 if(!isThreadRunning() && state!=TCP_INACTIVE){
 					startThread();
                 }
@@ -438,7 +440,12 @@ namespace tcp {
                 
                 //if the state is read, bump to reading
                 if(state==TCP_READ){
-                    setState(TCP_READING);
+                    if(mOut.empty()){
+                        setState(TCP_READING);
+                    }else{
+                        //there was a packet waiting for writing before we started reading
+                        setState(TCP_WRITE);
+                    }
                 }
             }
             
@@ -567,7 +574,7 @@ namespace tcp {
                     //write it
                     boost::asio::async_write(*mSocket,
                                              bufs,
-                                             boost::bind(&Obj::handle_write, this, boost::asio::placeholders::error));
+                                             boost::bind(&Obj::handle_write, this, boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred));
                 }else{
                     setState(TCP_READING);
                 }
@@ -575,7 +582,7 @@ namespace tcp {
                 
             }
             
-            void handle_write(const boost::system::error_code& error){
+            void handle_write(const boost::system::error_code& error,  std::size_t bytes_transferred){
                 
                 if(!error){
                     //success, do it again
