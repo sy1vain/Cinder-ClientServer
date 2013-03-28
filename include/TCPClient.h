@@ -480,7 +480,9 @@ namespace tcp {
             }
             
             void do_close(){
-                mSocket->close();
+                if(mSocket){
+                    mSocket->close();
+                }
       
                 setState(TCP_CLOSED);
                 
