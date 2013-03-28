@@ -212,6 +212,9 @@ namespace tcp {
             }
             
             ~Obj(){
+                if(isConnected()){
+                    closeConnection();
+                }
                 stopThread();
             }
             
@@ -431,7 +434,7 @@ namespace tcp {
                 
                 // wait for a message to arrive, then call handle_read
                 boost::asio::async_read_until(*mSocket, *buffer, delimiter,
-                                              boost::bind(&Obj::handle_read, this, boost::asio::placeholders::error, buffer));
+                                              boost::bind(&Obj::handle_read, this, boost::asio::placeholders::error, buffer, boost::asio::placeholders::bytes_transferred));
                 
                 //if the state is read, bump to reading
                 if(state==TCP_READ){
@@ -445,11 +448,9 @@ namespace tcp {
                 //return if not yet reading, but also when we are already writing is disconnecting
                 if(state<TCP_READING || state>=TCP_WRITING) return;
                 
-                tcp::io_service().post(
-                                         boost::bind(&Obj::do_write, this)
-                                         );
-                
                 setState(TCP_WRITING);
+                
+                requestWrite();
             }
             
             /*****************************************/
@@ -481,7 +482,7 @@ namespace tcp {
 #endif
             }
             
-            void handle_read(const boost::system::error_code& error, streambuffer_ptr &buffer){
+            void handle_read(const boost::system::error_code& error, streambuffer_ptr &buffer, std::size_t size){
                 
                 if(!error){
                     time(&mLastActivity);
@@ -495,11 +496,12 @@ namespace tcp {
                     size_t delimitSize = delimiter.size(); //we add1 1 because a string always ends in \0
                     
                     boost::asio::const_buffer b = buffer->data();
-                    size_t bufferSize = buffer_size(b);
+                    size_t bufferSize = size; //amount of data including first delimiter
+                    size_t dataSize = bufferSize - delimitSize; //amount of data untill first delimiter
                     const void *data = buffer_cast<const void *>(b);
                     
-                    ci::Buffer buff(bufferSize-delimitSize);
-                    memcpy(buff.getData(), data, bufferSize-delimitSize);
+                    ci::Buffer buff(dataSize);
+                    buff.copyFrom(data, dataSize);
                     {
                         std::lock_guard<std::mutex> lock(mDataMutex);
                         mIn.push(buff);
@@ -513,7 +515,7 @@ namespace tcp {
                     mDataSignal(getEndpoint(), buff);
 #endif
 
-                    //clear the buffer
+                    //clear the buffer by reading including our delimiter
                     buffer->consume(bufferSize);
                     
                     read(buffer);
@@ -527,6 +529,12 @@ namespace tcp {
                 }else{ //any other error: close it
                     closeConnection();
                 }
+            }
+            
+            void requestWrite(){
+                tcp::io_service().post(
+                                       boost::bind(&Obj::do_write, this)
+                                       );
             }
             
             void do_write(){
@@ -571,7 +579,7 @@ namespace tcp {
                 
                 if(!error){
                     //success, do it again
-                    do_write();
+                    requestWrite();
                 }else if(error == error::operation_aborted){
                     //we closed it outselves
                     return;
@@ -598,7 +606,6 @@ namespace tcp {
             }
             
             void stopThread(){
-
                 if(mThread){
                     {
                         std::lock_guard<std::mutex> lock(mRunMutex);

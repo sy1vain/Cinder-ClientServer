@@ -50,6 +50,7 @@ namespace tcp {
         }
         
         ~TCPServer(){
+            mObj.reset();
         }
         
         
@@ -114,6 +115,13 @@ namespace tcp {
             ~Obj(){
                 mAcceptor->close();
                 stopThread();
+                {
+                    std::lock_guard<std::mutex> lock(mDataMutex);
+                    for(auto & client: mClients){
+                        client->disconnect();
+                    }
+                    mClients.clear();
+                }
             }
             
             //this function will always return because it is always a shared object

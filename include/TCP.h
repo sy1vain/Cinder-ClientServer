@@ -37,7 +37,8 @@ namespace tcp {
     
     
     static boost::asio::io_service& io_service(){
-        return ci::app::App::get()->io_service();
+        static boost::asio::io_service service;
+        return service;
     }
     
     enum TCPState {
