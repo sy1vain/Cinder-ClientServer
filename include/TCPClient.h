@@ -102,16 +102,6 @@ namespace tcp {
             mObj->send(data);
         }
         
-        void sendRaw(const ci::Buffer & buffer){
-            if(!mObj) return;
-            mObj->send(buffer, true);
-        }
-        
-        void sendRaw(const std::string & data){
-            if(!mObj) return;
-            mObj->send(data, true);
-        }
-        
         endpoint_ptr getEndpoint(){
             if(!mObj) return endpoint_ptr();
             return mObj->getEndpoint();
@@ -192,11 +182,77 @@ namespace tcp {
         class Buffer : public cinder::Buffer {
         public:
             Buffer():cinder::Buffer(){}
-            Buffer(void *aBuffer, size_t aSize): cinder::Buffer(aBuffer, aSize){}
-            Buffer(size_t size) : cinder::Buffer(size){}
-            //Buffer(std::shared_ptr<class DataSource> dataSource) : cinder::Buffer(dataSource){}
             
-            bool raw;
+            //this copies from a cinder buffer and creats a checksum buffer
+            Buffer(const cinder::Buffer& source): cinder::Buffer(source.getDataSize()){
+                copyFrom(source.getData(), source.getDataSize());
+                //genereate checksum (done on request!)
+            }
+            //this copies from another sources and checks the checksum
+            Buffer(const void *aBuffer, size_t aSize): cinder::Buffer(aSize){
+                //excluding buffer
+                size_t dataSize = aSize-2;
+                //resize
+                resize(dataSize);
+                //copy the actual data
+                copyFrom(aBuffer,dataSize);
+                
+                const uint8_t* data = (const uint8_t*)aBuffer;
+                const uint8_t* chsm = data+dataSize;
+                
+                mChecksum = ci::Buffer(2);
+                mChecksum.copyFrom(chsm, 2);
+                
+                mChecked = verifyChecksum();
+            }
+            
+            const ci::Buffer& getChecksum(){
+                if(!mChecksum || mChecksum.getDataSize()==0){
+                    generateChecksum();
+                }
+                return mChecksum;
+            }
+            
+            bool check(){
+                return mChecked;
+            }
+            
+        protected:
+            void generateChecksum(){
+                uint8_t cksm = checksum();
+                
+                mChecksum = ci::Buffer(2);
+                uint8_t * cdata = (uint8_t*)mChecksum.getData();
+                *cdata = cksm;  //set the checksum
+                *(cdata+1) = ~cksm; //set the complement checksum
+                
+                mChecked = true;
+            }
+            
+            bool verifyChecksum(){
+                uint8_t * cdata = (uint8_t*)mChecksum.getData();
+                uint8_t cksm = *cdata;
+                uint8_t ccksm = ~*(cdata+1); //already complemented
+                //check for complements
+                if(ccksm!=cksm) return false;
+                
+                //this should work
+                return checksum()==cksm;
+            }
+            
+            uint8_t checksum(){
+                uint8_t * data = (uint8_t*)getData();
+                uint8_t chsm = 0;
+                for(int i=0; i<getDataSize(); i++){
+                    chsm = chsm^*(data+i);
+                }
+                
+                return chsm;
+            }
+            
+            ci::Buffer mChecksum;
+            bool mChecked;
+            
         };
         
         struct Obj {
@@ -327,11 +383,8 @@ namespace tcp {
                 return buffer;
             }
             
-            void send(const ci::Buffer & buffer, bool raw = false){
-                TCPClient::Buffer tcpbuffer(buffer.getDataSize());
-                memcpy(tcpbuffer.getData(), buffer.getData(), buffer.getDataSize());
-                
-                tcpbuffer.raw = raw;
+            void send(const ci::Buffer & buffer){
+                TCPClient::Buffer tcpbuffer(buffer);
                 send(tcpbuffer);
                 
             }
@@ -354,11 +407,9 @@ namespace tcp {
                 }
             }
             
-            void send(const std::string & data, bool raw = false){
-                //ci::Buffer buffer(data.size());
-                TCPClient::Buffer buffer(data.size());
+            void send(const std::string & data){
+                ci::Buffer buffer(data.size());
                 memcpy(buffer.getData(), data.data(), data.size());
-                buffer.raw = raw;
                 send(buffer);
             }
             
@@ -502,27 +553,30 @@ namespace tcp {
                         delimiter = mDelimiter;
                     }
                     
-                    size_t delimitSize = delimiter.size(); //we add1 1 because a string always ends in \0
+                    size_t delimitSize = delimiter.size();
                     
                     boost::asio::const_buffer b = buffer->data();
                     size_t bufferSize = size; //amount of data including first delimiter
                     size_t dataSize = bufferSize - delimitSize; //amount of data untill first delimiter
                     const void *data = buffer_cast<const void *>(b);
                     
-                    ci::Buffer buff(dataSize);
-                    buff.copyFrom(data, dataSize);
-                    {
-                        std::lock_guard<std::mutex> lock(mDataMutex);
-                        mIn.push(buff);
-                        //enforce only last 20 messages
-                        while(mIn.size()>20){
-                            mIn.pop();
+                    TCPClient::Buffer tcpBuffer(data, dataSize);
+                    if(tcpBuffer.check()){
+                        {
+                            std::lock_guard<std::mutex> lock(mDataMutex);
+                            mIn.push(tcpBuffer);
+                            //enforce only last 20 messages
+                            while(mIn.size()>20){
+                                mIn.pop();
+                            }
                         }
-                    }
                     
 #if defined(TCP_USE_SIGNALS)
-                    mDataSignal(getEndpoint(), buff);
+                        mDataSignal(getEndpoint(), tcpBuffer);
 #endif
+                    }else{
+                        ci::app::console() << "possible corrupted packet" << std::endl;
+                    }
 
                     //clear the buffer by reading including our delimiter
                     buffer->consume(bufferSize);
@@ -568,10 +622,11 @@ namespace tcp {
                     //get data reading in send format
                     std::vector<const_buffer> bufs;
                     bufs.push_back(buffer((char*)outBuffer.getData(), outBuffer.getDataSize()));
-                    //if not raw data, append the delimiter
-                    if(!outBuffer.raw){
-                        bufs.push_back(buffer(mDelimiter.c_str(), mDelimiter.size()));
-                    }
+                    //checksum
+                    ci::Buffer checksum = outBuffer.getChecksum();
+                    bufs.push_back(buffer((char*)checksum.getData(), checksum.getDataSize()));
+                    //delimiter
+                    bufs.push_back(buffer(mDelimiter.c_str(), mDelimiter.size()));
                     
                     //write it
                     boost::asio::async_write(*mSocket,
