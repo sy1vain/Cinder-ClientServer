@@ -645,24 +645,27 @@ namespace tcp {
                     //get data reading in send format
                     std::vector<const_buffer> bufs;
                     bufs.push_back(buffer((char*)outBuffer.getData(), outBuffer.getDataSize()));
-//                    //checksum
-//                    ci::Buffer checksum = outBuffer.getChecksum();
-//                    bufs.push_back(buffer((char*)checksum.getData(), checksum.getDataSize()));
                     //delimiter
                     bufs.push_back(buffer(mDelimiter.c_str(), mDelimiter.size()));
                     
-                    //write it
+                    //write it, sending the buffer with it so it gets retained
                     boost::asio::async_write(*mSocket,
                                              bufs,
-                                             boost::bind(&Obj::handle_write, this, boost::asio::placeholders::error, boost::asio::placeholders::bytes_transferred));
+                                             boost::bind(
+                                                         &Obj::handle_write,
+                                                         this,
+                                                         outBuffer,
+                                                         boost::asio::placeholders::error,
+                                                         boost::asio::placeholders::bytes_transferred
+                                                         ));
                 }else{
                     setState(TCP_READING);
                 }
                 
-                
             }
             
-            void handle_write(const boost::system::error_code& error,  std::size_t bytes_transferred){
+            //the out buffer is actuall never used, but in this way the memory gets retained untill this block
+            void handle_write(TCPClient::Buffer, const boost::system::error_code& error,  std::size_t bytes_transferred){
                 
                 if(!error){
                     //success, do it again
