@@ -263,7 +263,7 @@ namespace tcp {
             uint8_t checksum(){
                 uint8_t * data = (uint8_t*)mContents.getData();
                 uint8_t chsm = 0;
-                for(int i=0; i<mContents.getDataSize(); i++){
+                for(size_t i=0; i<mContents.getDataSize(); i++){
                     chsm = chsm^*(data+i);
                 }
                 
