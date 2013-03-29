@@ -178,38 +178,48 @@ namespace tcp {
         }
         
     private:
-        
         class Buffer : public cinder::Buffer {
         public:
             Buffer():cinder::Buffer(){}
             
             //this copies from a cinder buffer and creats a checksum buffer
-            Buffer(const cinder::Buffer& source): cinder::Buffer(source.getDataSize()){
+            Buffer(const cinder::Buffer& source): cinder::Buffer(source.getDataSize() + 2){
                 copyFrom(source.getData(), source.getDataSize());
+                
+                mContents = ci::Buffer(getData(), source.getDataSize());
+
                 //genereate checksum (done on request!)
+                generateChecksum();
             }
             //this copies from another sources and checks the checksum
             Buffer(const void *aBuffer, size_t aSize): cinder::Buffer(aSize){
-                //excluding buffer
-                size_t dataSize = aSize-2;
-                //resize
-                resize(dataSize);
                 //copy the actual data
-                copyFrom(aBuffer,dataSize);
+                copyFrom(aBuffer,aSize);
                 
-                const uint8_t* data = (const uint8_t*)aBuffer;
-                const uint8_t* chsm = data+dataSize;
+                //get the data
+                uint8_t * data = (uint8_t*)getData();
+                mContents = ci::Buffer(data, aSize-2);
                 
-                mChecksum = ci::Buffer(2);
-                mChecksum.copyFrom(chsm, 2);
+                                //get the checksum
+                uint8_t * cdata = data + mContents.getDataSize();
+                mChecksum = ci::Buffer(cdata, 2);
                 
+                //check the checksum
                 mChecked = verifyChecksum();
             }
             
+            ci::Buffer getBuffer(){
+                ci::Buffer b(getData(), getDataSize()-2);
+                return ci::Buffer(b);
+            }
+            
+            ci::Buffer getContents(){
+                ci::Buffer c(mContents.getDataSize());
+                c.copyFrom(mContents.getData(), mContents.getDataSize());
+                return c;
+            }
+            
             const ci::Buffer& getChecksum(){
-                if(!mChecksum || mChecksum.getDataSize()==0){
-                    generateChecksum();
-                }
                 return mChecksum;
             }
             
@@ -219,39 +229,51 @@ namespace tcp {
             
         protected:
             void generateChecksum(){
-                uint8_t cksm = checksum();
                 
-                mChecksum = ci::Buffer(2);
-                uint8_t * cdata = (uint8_t*)mChecksum.getData();
+                //generate
+                uint8_t * cdata = (uint8_t*)getData() + mContents.getDataSize();
+                mChecksum = ci::Buffer(cdata, 2);
+                
+                //calculate
+                uint8_t cksm = checksum();
+                uint8_t ccksm = ~cksm;
+                
+                //set
                 *cdata = cksm;  //set the checksum
-                *(cdata+1) = ~cksm; //set the complement checksum
+                cdata++;
+                *cdata = ccksm; //and set the inverse checksum
                 
                 mChecked = true;
             }
             
             bool verifyChecksum(){
+                
                 uint8_t * cdata = (uint8_t*)mChecksum.getData();
                 uint8_t cksm = *cdata;
-                uint8_t ccksm = ~*(cdata+1); //already complemented
-                //check for complements
-                if(ccksm!=cksm) return false;
+                cdata++;
+                uint8_t ccksm = *cdata;
+                uint8_t cccksm = ~ccksm;
                 
-                //this should work
+                if(cksm!=cccksm) return false;
+                
+                //check the checksum
                 return checksum()==cksm;
             }
             
             uint8_t checksum(){
-                uint8_t * data = (uint8_t*)getData();
+                uint8_t * data = (uint8_t*)mContents.getData();
                 uint8_t chsm = 0;
-                for(int i=0; i<getDataSize(); i++){
+                for(int i=0; i<mContents.getDataSize(); i++){
                     chsm = chsm^*(data+i);
                 }
                 
                 return chsm;
             }
             
-            ci::Buffer mChecksum;
             bool mChecked;
+            //these are actually just point to the data of this one
+            ci::Buffer mContents;
+            ci::Buffer mChecksum;
             
         };
         
@@ -562,9 +584,10 @@ namespace tcp {
                     
                     TCPClient::Buffer tcpBuffer(data, dataSize);
                     if(tcpBuffer.check()){
+                        ci::Buffer contents = tcpBuffer.getContents();
                         {
                             std::lock_guard<std::mutex> lock(mDataMutex);
-                            mIn.push(tcpBuffer);
+                            mIn.push(contents);
                             //enforce only last 20 messages
                             while(mIn.size()>20){
                                 mIn.pop();
@@ -572,7 +595,7 @@ namespace tcp {
                         }
                     
 #if defined(TCP_USE_SIGNALS)
-                        mDataSignal(getEndpoint(), tcpBuffer);
+                        mDataSignal(getEndpoint(), contents);
 #endif
                     }else{
                         ci::app::console() << "possible corrupted packet" << std::endl;
@@ -622,9 +645,9 @@ namespace tcp {
                     //get data reading in send format
                     std::vector<const_buffer> bufs;
                     bufs.push_back(buffer((char*)outBuffer.getData(), outBuffer.getDataSize()));
-                    //checksum
-                    ci::Buffer checksum = outBuffer.getChecksum();
-                    bufs.push_back(buffer((char*)checksum.getData(), checksum.getDataSize()));
+//                    //checksum
+//                    ci::Buffer checksum = outBuffer.getChecksum();
+//                    bufs.push_back(buffer((char*)checksum.getData(), checksum.getDataSize()));
                     //delimiter
                     bufs.push_back(buffer(mDelimiter.c_str(), mDelimiter.size()));
                     
