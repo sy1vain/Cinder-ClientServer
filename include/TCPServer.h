@@ -114,7 +114,6 @@ namespace tcp {
             }
             ~Obj(){
                 mAcceptor->close();
-                stopThread();
                 {
                     std::lock_guard<std::mutex> lock(mDataMutex);
                     for(auto & client: mClients){
@@ -122,6 +121,7 @@ namespace tcp {
                     }
                     mClients.clear();
                 }
+				stopThread();
             }
             
             //this function will always return because it is always a shared object
@@ -184,12 +184,7 @@ namespace tcp {
             /*****************************************/
             
             void accept(){
-                {
-                    std::lock_guard<std::mutex> lock(mRunMutex);
-                    if(!mThreadRunning){
-                        return;
-                    }
-                }
+				if(!isThreadRunning()) return;
                 
                 //this creates an empty client
                 tcp::TCPClientRef client(new tcp::TCPClient());
@@ -297,8 +292,10 @@ namespace tcp {
                     std::cout << "Error: " << error << std::endl;
                 }
                 
-                //accept another connection
-                accept();
+                //if not aborted, accept another connection
+				if(error.value()!=995){
+					accept();
+				}
             }
             
             /*****************************************/
@@ -355,10 +352,7 @@ namespace tcp {
                     
                     //sleep and update the running variable
                     ci::sleep(1);
-                    {
-                        std::lock_guard<std::mutex> lock(mRunMutex);
-                        running = mThreadRunning;
-                    }
+					running = isThreadRunning();
                 }
                 
             }
